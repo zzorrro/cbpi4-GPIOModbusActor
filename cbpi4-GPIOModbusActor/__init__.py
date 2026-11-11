@@ -5,7 +5,7 @@ from cbpi.api import CBPiActor, Property, parameters
 
 logger = logging.getLogger(__name__)
 
-# БЕЗОПАСНАЯ ЗАГРУЗКА RPi.GPIO (для тестирования плагина на Windows)
+# БЕЗОПАСНАЯ ЗАГЛУШКА ДЛЯ WINDOWS
 try:
     import RPi.GPIO as GPIO
 except Exception:
@@ -56,11 +56,9 @@ class GPIOModbusActor(CBPiActor):
         try:
             self.gpio = int(self.props.get("GPIO", 17))
             
-            # Настройка GPIO: прямой контакт, по умолчанию разомкнут (LOW)
             GPIO.setup(self.gpio, GPIO.OUT)
             GPIO.output(self.gpio, GPIO.LOW)
             
-            # Инициализация Modbus
             self.serial_port = self.props.get("Serial Port", "/dev/ttyUSB0")
             self.baudrate = int(self.props.get("Baudrate", 4800))
             self.slave_id = int(self.props.get("Slave ID", 1))
@@ -96,10 +94,8 @@ class GPIOModbusActor(CBPiActor):
         if self.power < 0: self.power = 0
         if self.power > 100: self.power = 100
 
-        # 1. Отправляем уставку скорости и проверяем результат
         success = await self._write_modbus_power(self.power)
             
-        # 2. Замыкаем контакт ТОЛЬКО если Modbus ответил успешно (Fail-Safe)
         if success:
             GPIO.output(self.gpio, GPIO.HIGH)
             logger.info(f"GPIOModbusActor {self.id} ON - GPIO {self.gpio} (HIGH) - Power {self.power}%")
@@ -112,15 +108,24 @@ class GPIOModbusActor(CBPiActor):
         """ВЫКЛЮЧЕНИЕ: Размыкаем контакт и сбрасываем скорость"""
         logger.info(f"GPIOModbusActor {self.id} OFF - GPIO {self.gpio} (LOW)")
         
-        # 1. Размыкаем прямой сухой контакт (Штатный стоп)
         if self.gpio is not None:
             GPIO.output(self.gpio, GPIO.LOW)
         
-        # 2. Сбрасываем скорость в 0 (Страховка на случай залипания реле)
         await self._write_modbus_power(0)
         
         self.state = False
         await self.cbpi.actor.actor_update(self.id, 0)
+
+    async def set_power(self, power):
+        """Обновление мощности БЕЗ изменения состояния ВКЛ/ВЫКЛ (вызывается ползунком в UI)"""
+        self.power = int(float(power))
+        if self.power < 0: self.power = 0
+        if self.power > 100: self.power = 100
+        
+        # Просто отправляем новую уставку по Modbus, не трогая GPIO
+        await self._write_modbus_power(self.power)
+        await self.cbpi.actor.actor_update(self.id, self.power)
+        logger.info(f"GPIOModbusActor {self.id} power updated to {self.power}% (State unchanged)")
 
     async def _write_modbus_power(self, power_percent) -> bool:
         """Внутренний метод для отправки значения в Modbus. Возвращает True при успехе."""
