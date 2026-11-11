@@ -31,5 +31,19 @@ pipx runpip cbpi4 install git+https://github.com/zzorrro/cbpi4-GPIOModbusActor.g
 # Перезапуск службы CBPi4
 sudo systemctl restart craftbeerpi.service
 
-
+Проверьте, видит ли система адаптер
 ls -l /dev/ttyUSB*
+
+По умолчанию задается порт: /dev/ttyUSB0, если порт называется иначе (например, ttyUSB1), укажите его в настройках.
+
+Если к вашей Raspberry Pi уже подключены другие USB-устройства, адаптер может получить имя `/dev/ttyUSB1` или `/dev/ttyUSB2` вместо `/dev/ttyUSB0`, а также при перезагрузке имена портов могут меняться местами.
+Для правильной инициализации нужно добавить в настройки уникальное имя порта.
+
+Узнать уникальное имя порта
+ls -l /dev/serial/by-id/
+
+Вы увидите вывод вроде этого:
+lrwxrwxrwx 1 root root 13 ноя  6 21:00 usb-1a86_USB_Serial-if00-port0 -> ../../ttyUSB1
+
+Вместо /dev/ttyUSB0 в настройках плагина CBPi4 нужно прописать полное имя из этой папки:
+/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
