@@ -33,7 +33,7 @@ except ImportError:
 @parameters([
     Property.Select(
         label="GPIO",
-        options=[str(i) for i in range(28)], # 0 to 27
+        options=[str(i) for i in range(2, 28)], # 2 to 27 (исключены пины 0 и 1 - ID_SD/ID_SC)
         description="GPIO pin (BCM) for the Run/Stop relay (Direct dry contact)"
     ),
     Property.Text(label="Serial Port", configurable=True, default_value="/dev/ttyUSB0", description="Serial port (e.g., /dev/ttyUSB0)"),
@@ -86,16 +86,20 @@ class GPIOModbusActor(CBPiActor):
 
     async def on(self, power=None):
         """ВКЛЮЧЕНИЕ: Задаем скорость и замыкаем прямой контакт"""
+        # Если мощность передана явно — используем её
         if power is not None:
             self.power = int(float(power))
-        else:
+        # Если мощность не передана — используем ранее заданную уставку
+        # Защита от первого запуска с нулевой уставкой
+        if self.power <= 0:
             self.power = 100
             
-        if self.power < 0: self.power = 0
         if self.power > 100: self.power = 100
 
+        # 1. Отправляем уставку скорости и проверяем результат
         success = await self._write_modbus_power(self.power)
             
+        # 2. Замыкаем контакт ТОЛЬКО если Modbus ответил успешно (Fail-Safe)
         if success:
             GPIO.output(self.gpio, GPIO.HIGH)
             logger.info(f"GPIOModbusActor {self.id} ON - GPIO {self.gpio} (HIGH) - Power {self.power}%")
@@ -108,9 +112,11 @@ class GPIOModbusActor(CBPiActor):
         """ВЫКЛЮЧЕНИЕ: Размыкаем контакт и сбрасываем скорость"""
         logger.info(f"GPIOModbusActor {self.id} OFF - GPIO {self.gpio} (LOW)")
         
+        # 1. Размыкаем прямой сухой контакт (Штатный стоп)
         if self.gpio is not None:
             GPIO.output(self.gpio, GPIO.LOW)
         
+        # 2. Сбрасываем скорость в 0 (Страховка на случай залипания реле)
         await self._write_modbus_power(0)
         
         self.state = False
@@ -129,9 +135,8 @@ class GPIOModbusActor(CBPiActor):
 
     async def _write_modbus_power(self, power_percent) -> bool:
         """Внутренний метод для отправки значения в Modbus. Возвращает True при успехе."""
-        if self.client is None or not self.client.connected:
+        if self.client is None:
             try:
-                if self.client: self.client.close()
                 self.client = ModbusSerialClient(
                     port=self.serial_port, baudrate=self.baudrate, bytesize=8, parity='N', stopbits=1, timeout=1
                 )
@@ -167,12 +172,12 @@ class GPIOModbusActor(CBPiActor):
         if self.gpio is not None:
             GPIO.output(self.gpio, GPIO.LOW)
         
-        if self.client and self.client.connected:
-            try:
-                await self._write_modbus_power(0)
-                logger.info(f"GPIOModbusActor {self.id}: Modbus forced to 0 on stop")
-            except Exception as e:
-                logger.warning(f"Failed to write 0 on stop: {e}")
+        # Пытаемся записать 0 всегда, даже если клиент не подключен (попытка переподключения)
+        try:
+            await self._write_modbus_power(0)
+            logger.info(f"GPIOModbusActor {self.id}: Modbus forced to 0 on stop")
+        except Exception as e:
+            logger.warning(f"Failed to write 0 on stop: {e}")
         
         if self.client:
             try:
