@@ -17,8 +17,7 @@ except Exception:
     import RPi.GPIO as GPIO
 
 # Проверка и установка режима BCM
-mode = GPIO.getmode()
-if mode is None:
+if GPIO.getmode() is None:
     GPIO.setmode(GPIO.BCM)
 
 try:
@@ -47,17 +46,18 @@ class GPIOModbusActor(CBPiActor):
         self.client = None
         self.power = 0
         self.state = False
+        self.gpio = None  # Защитная инициализация
 
     async def on_start(self):
         """Инициализация GPIO и Modbus"""
-        self.gpio = int(self.props.get("GPIO Pin", 17))
-        
-        # Настройка GPIO: прямой контакт, по умолчанию разомкнут (LOW)
-        GPIO.setup(self.gpio, GPIO.OUT)
-        GPIO.output(self.gpio, GPIO.LOW)
-        
-        # Инициализация Modbus
         try:
+            self.gpio = int(self.props.get("GPIO Pin", 17))
+            
+            # Настройка GPIO: прямой контакт, по умолчанию разомкнут (LOW)
+            GPIO.setup(self.gpio, GPIO.OUT)
+            GPIO.output(self.gpio, GPIO.LOW)
+            
+            # Инициализация Modbus
             self.serial_port = self.props.get("Serial Port", "/dev/ttyUSB0")
             self.baudrate = int(self.props.get("Baudrate", 4800))
             self.slave_id = int(self.props.get("Slave ID", 1))
@@ -86,28 +86,32 @@ class GPIOModbusActor(CBPiActor):
     async def on(self, power=None):
         """ВКЛЮЧЕНИЕ: Задаем скорость и замыкаем прямой контакт"""
         if power is not None:
-            self.power = int(power)
+            self.power = int(float(power))
         else:
             self.power = 100
             
         if self.power < 0: self.power = 0
         if self.power > 100: self.power = 100
 
-        # 1. Сначала отправляем уставку скорости (ЧП ее примет, но не запустится, пока реле разомкнуто)
-        await self._write_modbus_power(self.power)
+        # 1. Отправляем уставку скорости и проверяем результат
+        success = await self._write_modbus_power(self.power)
             
-        # 2. Замыкаем прямой сухой контакт (Пуск, HIGH)
-        GPIO.output(self.gpio, GPIO.HIGH)
-        logger.info(f"GPIOModbusActor {self.id} ON - GPIO {self.gpio} (HIGH) - Power {self.power}%")
-        self.state = True
-        await self.cbpi.actor.actor_update(self.id, self.power)
+        # 2. Замыкаем контакт ТОЛЬКО если Modbus ответил успешно (Fail-Safe)
+        if success:
+            GPIO.output(self.gpio, GPIO.HIGH)
+            logger.info(f"GPIOModbusActor {self.id} ON - GPIO {self.gpio} (HIGH) - Power {self.power}%")
+            self.state = True
+            await self.cbpi.actor.actor_update(self.id, self.power)
+        else:
+            logger.warning(f"GPIOModbusActor {self.id}: Modbus write FAILED. GPIO NOT closed for safety!")
 
     async def off(self):
         """ВЫКЛЮЧЕНИЕ: Размыкаем контакт и сбрасываем скорость"""
         logger.info(f"GPIOModbusActor {self.id} OFF - GPIO {self.gpio} (LOW)")
         
-        # 1. Размыкаем прямой сухой контакт (Штатный стоп, LOW)
-        GPIO.output(self.gpio, GPIO.LOW)
+        # 1. Размыкаем прямой сухой контакт (Штатный стоп)
+        if self.gpio is not None:
+            GPIO.output(self.gpio, GPIO.LOW)
         
         # 2. Сбрасываем скорость в 0 (Страховка на случай залипания реле)
         await self._write_modbus_power(0)
@@ -115,8 +119,8 @@ class GPIOModbusActor(CBPiActor):
         self.state = False
         await self.cbpi.actor.actor_update(self.id, 0)
 
-    async def _write_modbus_power(self, power_percent):
-        """Внутренний метод для отправки значения в Modbus"""
+    async def _write_modbus_power(self, power_percent) -> bool:
+        """Внутренний метод для отправки значения в Modbus. Возвращает True при успехе."""
         if self.client is None or not self.client.connected:
             try:
                 if self.client: self.client.close()
@@ -126,20 +130,20 @@ class GPIOModbusActor(CBPiActor):
                 self.client.connect()
             except Exception as e:
                 logger.warning(f"Modbus reconnection failed: {e}")
-                return
+                return False
 
         if self.client and self.client.connected:
             register_value = int((power_percent / 100.0) * self.max_value)
             try:
                 response = self.client.write_register(self.register, register_value, device_id=self.slave_id)
-                if response is None:
-                    logger.warning(f"Modbus write returned None for actor {self.id}")
-                elif response.isError():
-                    logger.warning(f"Modbus write error for actor {self.id}")
-                else:
-                    logger.debug(f"GPIOModbusActor {self.id}: Wrote {register_value} to register {self.register}")
+                if response is None or response.isError():
+                    logger.warning(f"Modbus write failed or returned error for actor {self.id}")
+                    return False
+                return True
             except Exception as e:
                 logger.warning(f"Modbus write exception: {e}")
+                return False
+        return False
 
     def get_state(self):
         return self.state
@@ -149,9 +153,11 @@ class GPIOModbusActor(CBPiActor):
             await asyncio.sleep(1)
 
     async def on_stop(self):
-        """Аварийная остановка: гарантированно размыкаем реле и сбрасываем Modbus"""
+        """Аварийная остановка"""
         logger.info(f"GPIOModbusActor {self.id} on_stop triggered")
-        GPIO.output(self.gpio, GPIO.LOW)
+        
+        if self.gpio is not None:
+            GPIO.output(self.gpio, GPIO.LOW)
         
         if self.client and self.client.connected:
             try:
