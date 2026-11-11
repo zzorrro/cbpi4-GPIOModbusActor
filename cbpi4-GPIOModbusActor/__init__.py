@@ -135,10 +135,18 @@ class GPIOModbusActor(CBPiActor):
 
     async def _write_modbus_power(self, power_percent) -> bool:
         """Внутренний метод для отправки значения в Modbus. Возвращает True при успехе."""
-        if self.client is None:
+        # ИСПРАВЛЕНО: проверяем и отсутствие клиента, и отвалившееся соединение
+        if self.client is None or not self.client.connected:
             try:
+                if self.client:
+                    self.client.close()
                 self.client = ModbusSerialClient(
-                    port=self.serial_port, baudrate=self.baudrate, bytesize=8, parity='N', stopbits=1, timeout=1
+                    port=self.serial_port,
+                    baudrate=self.baudrate,
+                    bytesize=8,
+                    parity='N',
+                    stopbits=1,
+                    timeout=1
                 )
                 self.client.connect()
             except Exception as e:
