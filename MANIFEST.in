@@ -1,0 +1,8 @@
+# Включаем файл с описанием
+include README.md
+
+# Включаем файл конфигурации (если он есть в корне)
+include config.yaml
+
+# Рекурсивно включаем все файлы внутри папки плагина
+recursive-include cbpi4_ModbusActor *
