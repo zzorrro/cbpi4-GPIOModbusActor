@@ -16,6 +16,9 @@ except Exception:
     patcher.start()
     import RPi.GPIO as GPIO
 
+# Отключаем бесполезные предупреждения о занятости пинов
+GPIO.setwarnings(False)
+
 # Проверка и установка режима BCM
 if GPIO.getmode() is None:
     GPIO.setmode(GPIO.BCM)
@@ -29,7 +32,7 @@ except ImportError:
 
 @parameters([
     Property.Select(
-        label="GPIO Pin",
+        label="GPIO",
         options=[str(i) for i in range(28)], # 0 to 27
         description="GPIO pin (BCM) for the Run/Stop relay (Direct dry contact)"
     ),
@@ -51,7 +54,7 @@ class GPIOModbusActor(CBPiActor):
     async def on_start(self):
         """Инициализация GPIO и Modbus"""
         try:
-            self.gpio = int(self.props.get("GPIO Pin", 17))
+            self.gpio = int(self.props.get("GPIO", 17))
             
             # Настройка GPIO: прямой контакт, по умолчанию разомкнут (LOW)
             GPIO.setup(self.gpio, GPIO.OUT)
