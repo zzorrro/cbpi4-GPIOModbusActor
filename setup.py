@@ -4,7 +4,7 @@ setup(
     name='cbpi4-GPIOModbusActor',
     version='1.0.0',
     description='CBPi4 Actor for VFD control via GPIO (Run/Stop) and RS485 Modbus RTU (0-10V speed)',
-    author='Sammy Brewery',
+    author='zzorrro',
     url='https://github.com/zzorrro/cbpi4-GPIOModbusActor',
     license='MIT',
     packages=find_packages(),
